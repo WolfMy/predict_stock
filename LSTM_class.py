@@ -3,6 +3,7 @@ from sklearn.preprocessing import MinMaxScaler
 import numpy as np
 import pandas as pd
 
+## ========== 以下为LSTM模型 ==========
 class LSTM():
     def __init__(self, name_scope, input_size, time_steps, batch_size=16, hidden_units = 128, learning_rate=0.01, epoches=100):
         self.name_scope = name_scope
@@ -57,12 +58,17 @@ class LSTM():
         with tf.name_scope('train'):
             self.train_op = tf.train.AdamOptimizer(self.learning_rate).minimize(self.loss)
 
-        self.sess = tf.Session()
+        config = tf.ConfigProto(allow_soft_placement=True)  
+        config.gpu_options.allow_growth = True  
+        self.sess = tf.Session(config=config) 
+
         self.sess.run(tf.local_variables_initializer())
         self.sess.run(tf.global_variables_initializer())
 
-        writer = tf.summary.FileWriter("logs/", self.sess.graph)
-        self.merg_op = tf.summary.merge_all()
+        self.saver=tf.train.Saver(max_to_keep=1)
+        #writer = tf.summary.FileWriter("logs/", self.sess.graph)
+        #self.merg_op = tf.summary.merge_all()
+        #self.saver.restore(self.sess, tf.train.latest_checkpoint('single_model'))
 
     def handle_predict_data(self, predict_data):
         predict_data = predict_data[np.newaxis, :]
@@ -88,6 +94,7 @@ class LSTM():
         return x_batches, y_batches
 
     def train(self, dataset):
+        min_loss = 1
         for i in range(self.epoches+1):
             x_batches, y_batches = self.get_batches(dataset)
             assert len(x_batches) == len(y_batches)
@@ -95,34 +102,53 @@ class LSTM():
                 train_data = x_batches[j]
                 train_label = y_batches[j]
                 self.sess.run (self.train_op, feed_dict = {self.x: train_data, self.y_: train_label})
-            if i%50 == 0:
-                loss = self.get_loss(x_batches[0], y_batches[0])
-                print("epoch %d, loss:%f" % (i, loss))
-        print("训练完成！")
+            train_loss = self.get_loss(x_batches[0], y_batches[0])
+            if train_loss < min_loss:
+                min_loss = train_loss
+                self.saver.save(self.sess, 'model/000001.SZ.ckpt')
+                print('epoch:%3d\ttrain_loss:%f'%(i, self.get_loss(x_batches[0], y_batches[0])))
+
+                df_prediction = pd.DataFrame(self.sess.run(self.prediction, feed_dict = {self.x: x_batches[0]}), columns=columns)
+                df_label = pd.DataFrame(y_batches[0], columns=columns)
+                df_prediction.to_csv('df_prediction.csv', index=False)
+                df_label.to_csv('df_label', index=False)
+                pd.DataFrame(scaler.inverse_transform(df_prediction), columns=columns).to_csv('df_prediction_scale.csv', index=False)
+                pd.DataFrame(scaler.inverse_transform(df_label), columns=columns).to_csv('df_label_scale.csv', index=False)
+                '''
+                print('prediction:')
+                print(self.sess.run (self.prediction, feed_dict = {self.x: x_batches[0]})[-1])
+                print('label:')
+                print(y_batches[0][-1])
+                '''
 
     def get_loss(self, data, label):
         return self.sess.run(self.loss, feed_dict={self.x: data, self.y_: label})
     
     def predict(self, data):
+        #checkpoint = 'model_checkpoint_path: "%s.ckpt"\nall_model_checkpoint_paths: "%s.ckpt"'%(self.name_scope, self.name_scope)
+        #write_file(path='models/checkpoint', content=checkpoint)
+        self.saver.restore(self.sess, tf.train.latest_checkpoint('model'))
         data = self.handle_predict_data(data)
         return self.sess.run(self.prediction, feed_dict={self.x: data})[-1].reshape(1, -1)
 
-if __name__ == "__main__":
-    dataset = pd.read_csv(filepath_or_buffer=r'/Users/mouyu/Desktop/600303.SH_08_18.csv')
-    dataset = dataset.values
-    scaler = MinMaxScaler()
-    dataset = scaler.fit_transform(dataset)
-    #print(dataset)
 
-    train_dataset = dataset[:40]
-    test_dataset = dataset[-13:-1]
-    # train
-    lstm = LSTM(name_scope='rnn', input_size=dataset.shape[1], time_steps=12, epoches=100)
-    lstm.train(dataset=train_dataset)
+dataset = pd.read_csv(filepath_or_buffer=r'/Users/mouyu/Desktop/000001.SZ.csv').drop('statDate', axis=1)
 
-    # test
-    print("prediction on test_dataset:")
-    print(scaler.inverse_transform(lstm.predict(test_dataset)))
-    print("y_test:")
-    print(scaler.inverse_transform(dataset[-1].reshape(1, -1)))
+columns = list(dataset.columns)
+#print('columns:',columns)
+scaler = MinMaxScaler()
+dataset = scaler.fit_transform(dataset)
 
+train_dataset = dataset
+test_dataset = dataset[-5:-1]
+# train
+lstm = LSTM(name_scope='rnn', input_size=dataset.shape[1], time_steps=4, hidden_units=128, epoches=200, learning_rate=0.001)
+lstm.train(dataset=train_dataset)
+
+'''
+# test
+print("prediction on test_dataset:")
+print(pd.DataFrame(scaler.inverse_transform(lstm.predict(test_dataset)), columns=columns))
+print("y_test:")
+print(pd.DataFrame(scaler.inverse_transform(dataset[-1].reshape(1,-1)), columns=columns))
+'''
